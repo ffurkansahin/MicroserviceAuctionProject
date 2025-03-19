@@ -3,6 +3,8 @@ using AuctionService.DTOs;
 using AuctionService.Entities;
 using AutoMapper;
 using AutoMapper.QueryableExtensions;
+using Contracts;
+using MassTransit;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
@@ -14,11 +16,13 @@ public class AuctionController : ControllerBase
 {
     private readonly AuctionDbContext _auctionDbContext;
     private readonly IMapper _mapper;
-    
-    public AuctionController(AuctionDbContext context,IMapper mapper)
+    private readonly IPublishEndpoint _publishEndpoint;
+
+    public AuctionController(AuctionDbContext context,IMapper mapper, IPublishEndpoint publishEndpoint)
     {
         this._auctionDbContext = context;
         this._mapper = mapper;
+        this._publishEndpoint = publishEndpoint;
     }
 
     [HttpGet]
@@ -52,11 +56,16 @@ public class AuctionController : ControllerBase
         auction.Seller = "furkan";
         
         _auctionDbContext.Auctions.Add(auction);
+
+        var newAuction = _mapper.Map<AuctionDto>(auction);
+
+        await _publishEndpoint.Publish(_mapper.Map<AuctionCreated>(newAuction));
+
         var result = await _auctionDbContext.SaveChangesAsync() > 0;
         
         if (!result) return BadRequest("Failed to create auction");
         
-        return CreatedAtAction(nameof(GetAuctionById), new { id = auction.Id }, _mapper.Map<AuctionDto>(auction));
+        return CreatedAtAction(nameof(GetAuctionById), new { id = auction.Id }, newAuction);
     }
 
     [HttpPut("{id}")]
@@ -75,6 +84,8 @@ public class AuctionController : ControllerBase
         auction.Item.Color = updateAuction.Color ?? auction.Item.Color;
         auction.Item.Mileage = updateAuction.Mileage ?? auction.Item.Mileage;
         auction.Item.Year = updateAuction.Year ?? auction.Item.Year;
+
+        await _publishEndpoint.Publish(_mapper.Map<AuctionUpdated>(auction));
         
         var result = await _auctionDbContext.SaveChangesAsync() > 0; //It still updated
         
@@ -94,6 +105,9 @@ public class AuctionController : ControllerBase
         //TODO check seller = username
         
         _auctionDbContext.Remove(auction);
+
+        await _publishEndpoint.Publish<AuctionDeleted>(new { Id = auction.Id.ToString() });
+
         var result = await _auctionDbContext.SaveChangesAsync() > 0;
         
         if (result) return Ok();
